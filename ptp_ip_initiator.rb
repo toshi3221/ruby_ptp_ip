@@ -140,8 +140,8 @@ class PtpIpInitiator
     def init_command
       init_command_payload = PTPIP_payload_INIT_CMD_PKT.new()
       init_command_payload.guid = str2guid(@guid)
-      init_command_payload.friendly_name = NAME
-      init_command_payload.protocol_version = PROTOCOL_VERSION
+      init_command_payload.friendly_name = @name
+      init_command_payload.protocol_version = @protocol_version
       init_command = PTPIP_packet.create(init_command_payload)
    
       write_packet(@command_sock, init_command)
