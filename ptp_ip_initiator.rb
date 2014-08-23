@@ -2,6 +2,8 @@ require 'socket'
 
 class PtpIpInitiator
  
+  attr_reader :transaction_id
+
   def initialize addr='127.0.0.1', port=15740, guid='', name='', protocol_version=65536
     @addr = addr
     @port = port
