@@ -2,8 +2,6 @@ require 'socket'
 
 class PtpIpInitiator
  
-  attr_reader :transaction_id
-
   def initialize addr='127.0.0.1', port=15740, guid='', name='', protocol_version=65536
     @addr = addr
     @port = port
@@ -13,9 +11,14 @@ class PtpIpInitiator
     @transaction_id = 1
   end
 
-  def wait_event
+  def next_transaction_id
+    @transaction_id
+  end
+
+  def wait_event expected_code = nil
     recv_pkt  = read_packet @event_sock
     raise "Invalid Event Packet. Packet Type: 0x#{recv_pkt.type.to_s(16)}" unless recv_pkt.type == PTPIP_PT_EventPacket
+    raise "Unexpected Event Code. Event Code: (Expect) 0x#{expected_code.to_s(16)}, (Received) 0x#{recv_pkt.payload.event_code.to_s(16)}" if !expected_code.nil? and expected_code.to_i != recv_pkt.payload.event_code.to_i
     return recv_pkt
   end
 
