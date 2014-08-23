@@ -62,45 +62,72 @@ class PtpIpInitiator
  
   def open(session_id = 1)
  
-    TCPSocket.open(@addr, @port) do |s|
- 
-      @command_sock = s
- 
-      # Command Connection
-      recv_pkt = init_command
-      raise "Initialization Failed (Command) #{recv_pkt.payload.reason}" if recv_pkt.type == PTPIP_PT_InitFailPacket
-      p @conn_number = recv_pkt.payload.conn_number
-      p @guid = recv_pkt.payload.guid
-      p @name = recv_pkt.payload.friendly_name
-      p @protocol_version = recv_pkt.payload.protocol_version
-   
-      TCPSocket.open(@addr, @port) do |es|
- 
-        @event_sock = es
- 
-        # Event Connection
-        recv_pkt = init_event
-        raise "Initialization Failed (Event) #{recv_pkt.payload.reason}" if recv_pkt.type == PTPIP_PT_InitFailPacket
-        print "Command/Event Connections are established.\n"
- 
-        # Open Session
-        recv_pkt = simple_operation(PTP_OC_OpenSession, [session_id])
-        raise "Open Session Failed #{recv_pkt.payload.response_code}" if recv_pkt.payload.response_code != PTP_RC_OK
+    @session_id = session_id
 
-        yield self
- 
-        # Close Session
-        recv_pkt = simple_operation(PTP_OC_CloseSession)
-        raise "Close Session Failed #{recv_pkt.payload.response_code}" if recv_pkt.payload.response_code != PTP_RC_OK
+    puts "Theta Session Open. session_id: #{session_id.to_s}, addr: #{@addr.to_s}, port: #{@port.to_s}"
 
+    if block_given?
+      TCPSocket.open(@addr, @port) do |s|
+        @command_sock = s
+        initialize_command_connection
+        TCPSocket.open(@addr, @port) do |es|
+          @event_sock = es
+          initialize_event_connection
+          open_session
+          yield self
+          close_session
+        end
       end
- 
+    else
+      @command_sock = TCPSocket.open(@addr, @port)
+      initialize_command_connection
+      @event_sock = TCPSocket.open(@addr, @port)
+      initialize_event_connection
+      open_session
+      return self
     end
 
   end
 
+  def close
+    close_session
+    @event_sock.close
+    @command_sock.close
+  end
 
   private
+
+    def initialize_command_connection
+      puts "Initialization Start (Command Connection)"
+      recv_pkt = init_command
+      raise "Initialization Failed (Command Connection) #{recv_pkt.payload.reason}" if recv_pkt.type == PTPIP_PT_InitFailPacket
+      @conn_number = recv_pkt.payload.conn_number
+      @guid = recv_pkt.payload.guid
+      @name = recv_pkt.payload.friendly_name
+      @protocol_version = recv_pkt.payload.protocol_version
+      puts "Initialize Success (Command Connection)\n  Response: #{recv_pkt.payload.to_hash.inspect}"
+    end
+
+    def initialize_event_connection
+      puts "Initialize Start (Event Connection)"
+      recv_pkt = init_event
+      raise "Initialization Failed (Event) #{recv_pkt.payload.reason}" if recv_pkt.type == PTPIP_PT_InitFailPacket
+      puts "Initialization Success (Event Connection)"
+    end
+
+    def open_session
+      puts "Operation (PTP_OC_OpenSession)"
+      recv_pkt = simple_operation(PTP_OC_OpenSession, [@session_id])
+      raise "Open Session Failed #{recv_pkt.payload.response_code}" if recv_pkt.payload.response_code != PTP_RC_OK
+      puts "Operation Success (PTP_OC_OpenSession)"
+    end
+
+    def close_session
+      puts "Operation (PTP_OC_CloseSession)"
+      recv_pkt = simple_operation(PTP_OC_CloseSession)
+      raise "Close Session Failed #{recv_pkt.payload.response_code}" if recv_pkt.payload.response_code != PTP_RC_OK
+      puts "Operation Success (PTP_OC_CloseSession)"
+    end
 
     def str2guid(str)
       hexes = str.scan /([a-fA-F0-9]{2})-*/
