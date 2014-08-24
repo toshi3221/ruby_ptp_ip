@@ -1,66 +1,62 @@
 require 'socket'
+require_relative 'ptp.rb'
+require_relative 'ptp_code.rb'
+require_relative 'ptp_ip.rb'
 
 class PtpIpInitiator
  
+  include PtpCode
+
+  attr_reader :current_transaction_id, :response_data, :response_packet
+
   def initialize addr='127.0.0.1', port=15740, guid='', name='', protocol_version=65536
-    @addr = addr
-    @port = port
-    @guid = guid
-    @name = name
-    @protocol_version = protocol_version
-    @transaction_id = 1
+    @addr, @port, @guid, @name, @protocol_version, @transaction_id = addr, port, guid, name, protocol_version, 1
   end
 
   def next_transaction_id
     @transaction_id
   end
 
-  def wait_event expected_code = nil
+  # You can set Event Code Name like this, 'ObjectAdded' or :ObjectAdded or 0x4002
+  def wait_event expected_code_name = nil
     recv_pkt  = read_packet @event_sock
     raise "Invalid Event Packet. Packet Type: 0x#{recv_pkt.type.to_s(16)}" unless recv_pkt.type == PTPIP_PT_EventPacket
-    raise "Unexpected Event Code. Event Code: (Expect) 0x#{expected_code.to_s(16)}, (Received) 0x#{recv_pkt.payload.event_code.to_s(16)}" if !expected_code.nil? and expected_code.to_i != recv_pkt.payload.event_code.to_i
-    return recv_pkt
+    expected_code = event_code expected_code_name if expected_code_name
+    payload = recv_pkt.payload
+    raise "Unexpected Event Code. Event Code: (Expect) #{expected_code.to_s}[0x#{expected_code.to_s(16)}], (Received) 0x#{payload.event_code.to_s(16)}" if !expected_code_name.nil? and expected_code.to_i != payload.event_code.to_i
+    response = {
+      event_code: payload.event_code,
+      parameters: payload.parameters,
+      transaction_id: payload.transaction_id
+    }
+    return response
   end
 
-  def data_operation(operation_code, parameters = [])
- 
-    transaction_id = @transaction_id
-    @transaction_id += 1
- 
-    op_payload = PTPIP_payload_OPERATION_REQ_PKT.new()
-    op_payload.data_phase_info = PTPIP_payload_OPERATION_REQ_PKT::NO_DATA_OR_DATA_IN_PHASE
-    op_payload.operation_code = operation_code
-    op_payload.transaction_id = transaction_id
-    op_payload.parameters = parameters
-    op_pkt = PTPIP_packet.create(op_payload)
-    write_packet(@command_sock, op_pkt)
- 
-    data = recv_data(@command_sock, transaction_id)
-    recv_pkt = read_packet(@command_sock)
+  # You can set Operation Code Name like this, 'GetDeviceInfo' or :GetDeviceInfo or 0x1001
+  def operation(operation_code_name, parameters = [])
 
-    raise "Data Operation Failed. code: 0x#{operation_code.to_s(16)}, response_code: #{recv_pkt.payload.response_code}" if recv_pkt.payload.response_code != PTP_RC_OK
+    oc = operation_code operation_code_name
+    operation_impl oc, parameters
+ 
+    recv_pkt = read_packet @command_sock
+    if recv_pkt.type == PTPIP_PT_StartDataPacket
+      @response_data = recv_data @command_sock, @current_transaction_id, recv_pkt
+      @response_packet = read_packet @command_sock
+    else
+      @response_data = nil
+      @response_packet = recv_pkt
+    end
 
-    return recv_pkt, data
-  end
- 
-  def simple_operation(operation_code, parameters = [])
- 
-    transaction_id = @transaction_id
-    @transaction_id += 1
- 
-    op_payload = PTPIP_payload_OPERATION_REQ_PKT.new()
-    op_payload.data_phase_info = PTPIP_payload_OPERATION_REQ_PKT::NO_DATA_OR_DATA_IN_PHASE
-    op_payload.operation_code = operation_code
-    op_payload.transaction_id = transaction_id
-    op_payload.parameters = parameters
-    op_pkt = PTPIP_packet.create(op_payload)
-    write_packet(@command_sock, op_pkt)
- 
-    recv_pkt = read_packet(@command_sock)
+    payload = @response_packet.payload
+    raise "Operation Failed. code: #{operation_code_name.to_s}[0x#{operation_code.to_s(16)}], response_code: #{payload.response_code}" if payload.response_code != PTP_RC_OK
+    response = {
+      code: payload.response_code,
+      parameters: payload.parameters,
+      transaction_id: payload.transaction_id
+    }
+    response[:data] = @response_data if @response_data
+    return response
 
-    raise "Simple Operation Failed. code: 0x#{operation_code.to_s(16)}, response_code: #{recv_pkt.payload.response_code}" if recv_pkt.payload.response_code != PTP_RC_OK
-
-    return recv_pkt
   end
  
   def open(session_id = 1)
@@ -119,17 +115,30 @@ class PtpIpInitiator
     end
 
     def open_session
-      puts "Operation (PTP_OC_OpenSession)"
-      recv_pkt = simple_operation(PTP_OC_OpenSession, [@session_id])
-      raise "Open Session Failed #{recv_pkt.payload.response_code}" if recv_pkt.payload.response_code != PTP_RC_OK
-      puts "Operation Success (PTP_OC_OpenSession)"
+      puts "Operation (OpenSession)"
+      response = operation(:OpenSession, [@session_id])
+      raise "Open Session Failed #{response[:code]}" if response[:code] != PTP_RC_OK
+      puts "Operation Success (OpenSession)"
     end
 
     def close_session
-      puts "Operation (PTP_OC_CloseSession)"
-      recv_pkt = simple_operation(PTP_OC_CloseSession)
-      raise "Close Session Failed #{recv_pkt.payload.response_code}" if recv_pkt.payload.response_code != PTP_RC_OK
-      puts "Operation Success (PTP_OC_CloseSession)"
+      puts "Operation (CloseSession)"
+      response = operation(:CloseSession)
+      raise "Close Session Failed #{response[:code]}" if response[:code] != PTP_RC_OK
+      puts "Operation Success (CloseSession)"
+    end
+
+    def operation_impl operation_code, parameters = []
+      transaction_id = @current_transaction_id = @transaction_id
+      @transaction_id += 1
+
+      op_payload = PTPIP_payload_OPERATION_REQ_PKT.new()
+      op_payload.data_phase_info = PTPIP_payload_OPERATION_REQ_PKT::NO_DATA_OR_DATA_IN_PHASE
+      op_payload.operation_code = operation_code
+      op_payload.transaction_id = transaction_id
+      op_payload.parameters = parameters
+      op_pkt = PTPIP_packet.create(op_payload)
+      write_packet(@command_sock, op_pkt)
     end
 
     def str2guid(str)
@@ -153,12 +162,12 @@ class PtpIpInitiator
       PTPIP_packet.new(data)
     end
    
-    def recv_data(sock, transaction_id)
-      recv_pkt = read_packet(sock)
-      raise "Invalid Packet : #{recv_pkt.to_s}" if recv_pkt.type != PTPIP_PT_StartDataPacket
-      raise "Invalid Transaction ID" if recv_pkt.payload.transaction_id != transaction_id
-      data_len = recv_pkt.payload.total_data_length_low
+    def recv_data(sock, transaction_id, start_data_packet)
+      raise "Invalid Packet : #{recv_pkt.to_s}" if start_data_packet.type != PTPIP_PT_StartDataPacket
+      raise "Invalid Transaction ID" if start_data_packet.payload.transaction_id != transaction_id
+      data_len = start_data_packet.payload.total_data_length_low
       data = []
+      recv_pkt = start_data_packet
       while recv_pkt.type != PTPIP_PT_EndDataPacket
           recv_pkt = read_packet(sock)
           raise "Invalid Packet : #{recv_pkt.to_s}" if recv_pkt.type != PTPIP_PT_DataPacket && recv_pkt.type != PTPIP_PT_EndDataPacket
