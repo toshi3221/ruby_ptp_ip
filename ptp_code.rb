@@ -21,12 +21,18 @@ module PtpCode
 
   def device_property_code name
     return name unless is_a_code_name? name
+    name = 'WiteBalance' if name.to_s == 'WhiteBalance'
     Object.const_get "PTP_DPC_#{name.to_s}"
   end
 
   def object_format_code name
     return name unless is_a_code_name? name
     Object.const_get "PTP_OFC_#{name.to_s}"
+  end
+
+  def white_balance_code name
+    return name unless is_a_code_name? name
+    Object.const_get "PTP_WB_#{name.to_s}"
   end
 
   private

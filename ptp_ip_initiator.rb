@@ -6,6 +6,7 @@ require_relative 'ptp_ip.rb'
 class PtpIpInitiator
  
   include PtpCode
+  MTU = 1200
 
   attr_reader :current_transaction_id, :response_data, :response_packet
 
@@ -33,10 +34,10 @@ class PtpIpInitiator
   end
 
   # You can set Operation Code Name like this, 'GetDeviceInfo' or :GetDeviceInfo or 0x1001
-  def operation(operation_code_name, parameters = [])
+  def operation(operation_code_name, parameters = [], data = nil)
 
     oc = operation_code operation_code_name
-    operation_impl oc, parameters
+    operation_impl oc, parameters, data
  
     recv_pkt = read_packet @command_sock
     if recv_pkt.type == PTPIP_PT_StartDataPacket
@@ -128,7 +129,7 @@ class PtpIpInitiator
       puts "Operation Success (CloseSession)"
     end
 
-    def operation_impl operation_code, parameters = []
+    def operation_impl operation_code, parameters = [], data = nil
       transaction_id = @current_transaction_id = @transaction_id
       @transaction_id += 1
 
@@ -139,6 +140,8 @@ class PtpIpInitiator
       op_payload.parameters = parameters
       op_pkt = PTPIP_packet.create(op_payload)
       write_packet(@command_sock, op_pkt)
+
+      send_data @command_sock, @current_transaction_id, data if data
     end
 
     def str2guid(str)
@@ -176,6 +179,47 @@ class PtpIpInitiator
       end
       raise "Invalid Data Size" unless data_len == data.length
       return data
+    end
+
+    def send_packet(sock, packet)
+        sock.send(packet.to_data.pack("C*"), 0)
+    end
+
+    def send_data(sock, transaction_id, data)
+    
+      s = 0
+          
+      #start data phase
+      payload = PTPIP_payload_START_DATA_PKT.new()
+      payload.transaction_id = transaction_id
+      payload.total_data_length_low = data.size
+      payload.total_data_length_high = 0
+      
+      packet = PTPIP_packet.create(payload)
+      
+      if 0 > send_packet(sock, packet) then raise "send error." end
+      
+      ##data
+      while s+MTU < data.size do
+        payload = PTPIP_payload_DATA_PKT.new()
+        payload.transaction_id = transaction_id
+        payload.data_payload = data[s..s+MTU-1]
+        
+        packet = PTPIP_packet.create(payload)
+        
+        if 0 > send_packet(sock, packet) then raise "send error." end
+        
+        s += MTU
+      end
+      
+      ##end data
+      payload = PTPIP_payload_END_DATA_PKT.new()
+      payload.transaction_id = transaction_id
+      payload.data_payload = data[s..-1]
+      
+      packet = PTPIP_packet.create(payload)
+      
+      if 0 > send_packet(sock, packet) then raise "send error." end
     end
    
     def init_command
