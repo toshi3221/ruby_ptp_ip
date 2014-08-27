@@ -1,7 +1,6 @@
 #!/bin/ruby
 #
-# This sample demonstrates how to capture and then
-# getting the objects as thumbnail and picture.
+# This sample demonstrates how to get/set device propety.
 #
 
 require 'socket'
