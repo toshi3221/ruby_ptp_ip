@@ -24,7 +24,9 @@ class PtpIpInitiator
     raise "Invalid Event Packet. Packet Type: 0x#{recv_pkt.type.to_s(16)}" unless recv_pkt.type == PTPIP_PT_EventPacket
     expected_code = event_code expected_code_name if expected_code_name
     payload = recv_pkt.payload
-    raise "Unexpected Event Code. Event Code: (Expect) #{expected_code.to_s}[0x#{expected_code.to_s(16)}], (Received) 0x#{payload.event_code.to_s(16)}" if !expected_code_name.nil? and expected_code.to_i != payload.event_code.to_i
+    recv_event_name = event_name(payload.event_code) || 'Unknown'
+    puts "Receive Event: #{recv_event_name}[0x#{payload.event_code.to_s(16)}], parameters: #{payload.parameters.inspect}, transaciton_id: #{payload.transaction_id.inspect}"
+    raise "Unexpected Event Code. Event Code: (Expect) #{expected_code.to_s}[0x#{expected_code.to_s(16)}]" if !expected_code_name.nil? and expected_code.to_i != payload.event_code.to_i
     response = {
       event_code: payload.event_code,
       parameters: payload.parameters,
