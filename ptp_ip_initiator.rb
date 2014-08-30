@@ -2,6 +2,7 @@ require 'socket'
 require_relative 'ptp.rb'
 require_relative 'ptp_code.rb'
 require_relative 'ptp_ip.rb'
+require 'thread'
 
 class PtpIpInitiator
  
@@ -12,6 +13,7 @@ class PtpIpInitiator
 
   def initialize addr='127.0.0.1', port=15740, guid='', name='', protocol_version=65536
     @addr, @port, @guid, @name, @protocol_version, @transaction_id = addr, port, guid, name, protocol_version, 1
+    @event_queue = Queue.new
   end
 
   def next_transaction_id
@@ -20,12 +22,10 @@ class PtpIpInitiator
 
   # You can set Event Code Name like this, 'ObjectAdded' or :ObjectAdded or 0x4002
   def wait_event expected_code_name = nil
-    recv_pkt  = read_packet @event_sock
-    raise "Invalid Event Packet. Packet Type: 0x#{recv_pkt.type.to_s(16)}" unless recv_pkt.type == PTPIP_PT_EventPacket
+    recv_pkt = @event_queue.pop
     expected_code = event_code expected_code_name if expected_code_name
     payload = recv_pkt.payload
     recv_event_name = event_name(payload.event_code) || 'Unknown'
-    puts "Receive Event: #{recv_event_name}[0x#{payload.event_code.to_s(16)}], parameters: #{payload.parameters.inspect}, transaciton_id: #{payload.transaction_id.inspect}"
     raise "Unexpected Event Code. Event Code: (Expect) #{expected_code.to_s}[0x#{expected_code.to_s(16)}]" if !expected_code_name.nil? and expected_code.to_i != payload.event_code.to_i
     response = {
       event_code: payload.event_code,
@@ -33,6 +33,15 @@ class PtpIpInitiator
       transaction_id: payload.transaction_id
     }
     return response
+  end
+
+  def get_event expected_code_name = nil
+    return nil unless has_event?
+    wait_event expected_code_name
+  end
+
+  def has_event?
+    !@event_queue.empty?
   end
 
   # You can set Operation Code Name like this, 'GetDeviceInfo' or :GetDeviceInfo or 0x1001
@@ -114,6 +123,7 @@ class PtpIpInitiator
       puts "Initialize Start (Event Connection)"
       recv_pkt = init_event
       raise "Initialization Failed (Event) #{recv_pkt.payload.reason}" if recv_pkt.type == PTPIP_PT_InitFailPacket
+      Thread.start { event_queuing_runner }
       puts "Initialization Success (Event Connection)"
     end
 
@@ -129,6 +139,17 @@ class PtpIpInitiator
       response = operation(:CloseSession)
       raise "Close Session Failed #{response[:code]}" if response[:code] != PTP_RC_OK
       puts "Operation Success (CloseSession)"
+    end
+
+    def event_queuing_runner
+      while true do
+        recv_pkt  = read_packet @event_sock
+        puts "Invalid Event Packet. Packet Type: 0x#{recv_pkt.type.to_s(16)}" and next unless recv_pkt.type == PTPIP_PT_EventPacket
+        payload = recv_pkt.payload
+        recv_event_name = event_name(payload.event_code) || 'Unknown'
+        puts "Receive Event: #{recv_event_name}[0x#{payload.event_code.to_s(16)}], parameters: #{payload.parameters.inspect}, transaciton_id: #{payload.transaction_id.inspect}"
+        @event_queue.push recv_pkt
+      end
     end
 
     def operation_impl operation_code, parameters = [], data = nil
