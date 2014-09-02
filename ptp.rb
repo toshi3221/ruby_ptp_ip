@@ -252,6 +252,30 @@ PTP_FMM_Undefined = 0x0000
 PTP_FMM_CenterSpot = 0x0001
 PTP_FMM_MultiSpot = 0x0002
 
+#data type
+PTP_DT_Undefined = 0x0000
+PTP_DT_INT8 = 0x0001
+PTP_DT_UINT8 = 0x0002
+PTP_DT_INT16 = 0x0003
+PTP_DT_UINT16 = 0x0004
+PTP_DT_INT32 = 0x0005
+PTP_DT_UINT32 = 0x0006
+PTP_DT_INT64 = 0x0007
+PTP_DT_UINT64 = 0x0008
+PTP_DT_INT128 = 0x0009
+PTP_DT_UINT128 = 0x000A
+PTP_DT_AINT8 = 0x4001
+PTP_DT_AUINT8 = 0x4002
+PTP_DT_AINT16 = 0x4003
+PTP_DT_AUINT16 = 0x4004
+PTP_DT_AINT32 = 0x4005
+PTP_DT_AUINT32 = 0x4006
+PTP_DT_AINT64 = 0x4007
+PTP_DT_AUINT64 = 0x4008
+PTP_DT_AINT128 = 0x4009
+PTP_DT_AUINT128 = 0x400A
+PTP_DT_STR = 0xFFFF
+
 
 #utilities
 def PTP_parse_short(offset, data)
@@ -283,6 +307,48 @@ def PTP_parse_long_array(offset, data)
         ret << s
     end
     return ret, start
+end
+
+def PTP_pack_template data_type
+    pack_tmp = case data_type
+    when PTP_DT_INT8, PTP_DT_AINT8 then ['c', 1]
+    when PTP_DT_UINT8, PTP_DT_AUINT8 then ['C', 1]
+    when PTP_DT_INT16, PTP_DT_AINT16 then ['s', 2]
+    when PTP_DT_UINT16, PTP_DT_AUINT16 then ['S', 2]
+    when PTP_DT_INT32, PTP_DT_AINT32 then ['l', 4]
+    when PTP_DT_UINT32, PTP_DT_AUINT32 then ['L', 4]
+    when PTP_DT_INT64, PTP_DT_AINT64 then ['q', 8]
+    when PTP_DT_UINT64, PTP_DT_AUINT64 then ['Q', 8]
+    when PTP_DT_INT128, PTP_DT_AINT128, PTP_DT_UINT128, PTP_DT_AUINT128 then raise '128bit integer is not implemented.'
+    end
+    pack_template, data_byte = pack_tmp[0], pack_tmp[1]
+    return pack_template, data_byte
+end
+
+def PTP_parse_data(offset, data, data_type)
+    return PTP_parse_string(offset, data) if data_type == PTP_DT_STR
+    raise "UNKNOWN data type: #{data_type.inspect}" if (!(0x0000...0x1000).include?(data_type) and !(0x4000...0x5000).include?(data_type))
+    is_array =  (0x4000...0x5000).include?(data_type)
+    pack_template, data_byte = PTP_pack_template data_type
+    if is_array
+        number_of_value, offset = PTP_parse_short offset, data
+        pack_template += number_of_value.to_s
+    end
+    data_length = (number_of_value||1)*data_byte
+    values = data[offset,data_length].pack('C*').unpack(pack_template)
+    return (is_array ? values : values[0]), offset+data_length
+end
+
+def PTP_create_data(data, data_type)
+    return data.unpack("U*").pack("S*").unpack("C*") if data_type == PTP_DT_STR
+    raise "UNKNOWN data type: #{data_type.inspect}" if (!(0x0000...0x1000).include?(data_type) and !(0x4000...0x5000).include?(data_type))
+    is_array = (0x4000...0x5000).include?(data_type)
+    pack_template, data_byte = PTP_pack_template data_type
+    if is_array
+        return [data.size, data].pack('S'+pack_template).unpack('C*')
+    else
+        return [data].pack(pack_template).unpack('C*')
+    end
 end
 
 class PTP_DeviceInfo
@@ -540,4 +606,144 @@ end
 def PTP_CreateDateTimeString(date)
     return nil if not date.to_a? Date
     date.strftime("%Y%m%dT%H%M%S")
+end
+
+class PTP_DevicePropDesc
+
+    attr_accessor :device_property_code, :data_type, :is_writable, :default_value, :current_value, :form
+
+    def initialize device_property_code, data_type, is_writable, default_value, current_value, form
+      @device_property_code = device_property_code
+      @data_type = data_type
+      @is_writable = is_writable
+      @default_value = default_value
+      @current_value = current_value
+      @form = form
+    end
+
+    class << self
+        def create data
+            device_propery_code = data[0,2].pack('C*').unpack('S')[0]
+            data_type = data[2,2].pack('C*').unpack('S')[0]
+            is_writable = data[4] == 1 ? true : false
+            default_value, offset = PTP_parse_data(5, data, data_type)
+            current_value, offset = PTP_parse_data(offset, data, data_type)
+            form_flag = data[offset]
+            offset += 1
+            form = case form_flag
+                when Form::FLAGS[:none] then nil
+                when Form::FLAGS[:range] then RangeForm.create data[offset..-1], data_type
+                when Form::FLAGS[:enumeration] then EnumerationForm.create data[offset..-1], data_type
+                else raise "[FIXME]Not Implement Flag: #{form_flag.inspect}"
+                end
+            self.new device_propery_code, data_type, is_writable, default_value, current_value, form
+        end
+    end
+
+    def to_data
+        [@device_property_code].pack('S').unpack('C*') +
+        [@data_type].pack('S').unpack('C*') +
+        [@is_writable].pack('C').unpack('C*') +
+        PTP_create_data(@default_value, @data_type) +
+        PTP_create_data(@current_value, @data_type) +
+        @form.nil? ? [Form::FLAGS[:none]] : @form.to_data
+    end
+
+    def to_hash
+        {
+        device_propery_code: @device_property_code,
+        data_type: @data_type,
+        is_writable: @is_writable,
+        default_value: @default_value,
+        current_value: @current_value,
+        form: @form.nil? ? nil : @form.to_hash,
+        }
+    end
+
+    def to_s
+        self.to_hash.to_s
+    end
+
+    class Form
+        attr_accessor :flag
+        FLAGS = {
+            none: 0x00,
+            range: 0x01,
+            enumeration: 0x02,
+            time: 0x03,
+            fixed_langth_arry: 0x04,
+            regular_expression: 0x05,
+            byte_string: 0x06,
+            long_string: 0x07
+        }
+    end
+
+    class RangeForm < Form
+        attr_accessor :minimum_value, :maximum_value, :step_size
+        def initialize minimum_value, maximum_value, step_size, data_type
+            @flag = FLAGS[:range]
+            @data_type = data_type
+            @minimum_value = minimum_value
+            @maximum_value = maximum_value
+            @step_size = step_size
+        end
+        class << self
+            def create data, data_type
+                minimum_value, offset = PTP_parse_data(0, data, data_type)
+                maximum_value, offset = PTP_parse_data(offset, data, data_type)
+                step_size, offset = PTP_parse_data(offset, data, data_type)
+                self.new minimum_value, maximum_value, step_size, data_type
+            end
+        end
+        def to_data
+            [@flag].pack('C').unpack('C')+
+            PTP_create_data(@minimum_value, @data_type) +
+            PTP_create_data(@maximum_value, @data_type) +
+            PTP_caeate_data(@step_size, @data_type)
+        end
+        def to_hash
+            {
+            form_flag: @flag,
+            minimum_value: @minimum_value,
+            maximum_value: @maximum_value,
+            step_size: @step_size
+            }
+        end
+        def to_s
+            self.to_hash.to_s
+        end
+    end
+
+    class EnumerationForm < Form
+        attr_accessor :number_of_value, :supported_values
+        def initialize supported_values
+            @flag = FLAGS[:enumeration]
+            @number_of_value = supported_values.size
+            @supported_values = supported_values
+        end
+        class << self
+            def create data, data_type
+                number_of_value, offset = PTP_parse_data(0, data, data_type)
+                supported_values = (1..number_of_value).map do |i|
+                    value, offset = PTP_parse_data(offset, data, data_type)
+                    value
+                end
+                self.new supported_values
+            end
+        end
+        def to_data
+            [@number_of_value].pack('S').unpack('C*') +
+            PTP_create_data(@supported_values, data_type)
+        end
+        def to_hash
+            {
+            form_flag: @flag,
+            number_of_value: @number_of_value,
+            supported_values: @supported_values
+            }
+        end
+        def to_s
+            self.to_hash.to_s
+        end
+    end
 end

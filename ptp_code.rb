@@ -69,6 +69,15 @@ module PtpCode
     WHITE_BALANCES[code]
   end
 
+  DATA_TYPES = create_ptp_code_hash /^PTP_DT_/
+  def data_type_code name
+    return name unless is_a_code_name? name
+    Object.const_get "PTP_DT_#{name.to_s}"
+  end
+  def data_type_name code
+    DATA_TYPES[code]
+  end
+
   private
 
   def is_a_code_name? name
