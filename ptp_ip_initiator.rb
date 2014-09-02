@@ -60,7 +60,7 @@ class PtpIpInitiator
     end
 
     payload = @response_packet.payload
-    raise "Operation Failed. code: #{operation_code_name.to_s}[0x#{operation_code.to_s(16)}], response_code: #{payload.response_code}" if payload.response_code != PTP_RC_OK
+    raise "Operation Failed. code: #{operation_name(oc).to_s}[0x#{oc.to_s(16)}], response_code: #{operation_response_name(payload.response_code)}[0x#{payload.response_code.to_s(16)}]" if payload.response_code != PTP_RC_OK
     response = {
       code: payload.response_code,
       parameters: payload.parameters,
