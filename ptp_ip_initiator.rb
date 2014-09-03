@@ -51,8 +51,15 @@ class PtpIpInitiator
     operation_impl oc, parameters, data
  
     recv_pkt = read_packet @command_sock
+    data_size = 0
     if recv_pkt.type == PTPIP_PT_StartDataPacket
-      @response_data = recv_data @command_sock, @current_transaction_id, recv_pkt
+      if block_given?
+        data_size += recv_data @command_sock, @current_transaction_id, recv_pkt do |data|
+           yield data
+        end
+      else
+        @response_data = recv_data @command_sock, @current_transaction_id, recv_pkt
+      end
       @response_packet = read_packet @command_sock
     else
       @response_data = nil
@@ -67,6 +74,7 @@ class PtpIpInitiator
       transaction_id: payload.transaction_id
     }
     response[:data] = @response_data if @response_data
+    response[:data_size] = data_size if block_given?
     return response
 
   end
@@ -193,15 +201,22 @@ class PtpIpInitiator
       raise "Invalid Transaction ID" if start_data_packet.payload.transaction_id != transaction_id
       data_len = start_data_packet.payload.total_data_length_low
       data = []
+      recv_data_length = 0
       recv_pkt = start_data_packet
       while recv_pkt.type != PTPIP_PT_EndDataPacket
           recv_pkt = read_packet(sock)
           raise "Invalid Packet : #{recv_pkt.to_s}" if recv_pkt.type != PTPIP_PT_DataPacket && recv_pkt.type != PTPIP_PT_EndDataPacket
           raise "Invalid Transaction ID" if recv_pkt.payload.transaction_id != transaction_id
-          data += recv_pkt.payload.data_payload
+          payload = recv_pkt.payload.data_payload
+          if block_given?
+              yield payload.pack 'C*'
+          else
+              data += payload
+          end
+          recv_data_length += payload.length
       end
-      raise "Invalid Data Size" unless data_len == data.length
-      return data
+      raise "Invalid Data Size" unless data_len == recv_data_length
+      return block_given? ? data_len : data
     end
 
     def send_packet(sock, packet)
