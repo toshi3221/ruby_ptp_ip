@@ -331,7 +331,7 @@ def PTP_parse_data(offset, data, data_type)
     is_array =  (0x4000...0x5000).include?(data_type)
     pack_template, data_byte = PTP_pack_template data_type
     if is_array
-        number_of_value, offset = PTP_parse_short offset, data
+        number_of_value, offset = PTP_parse_long offset, data
         pack_template += number_of_value.to_s
     end
     data_length = (number_of_value||1)*data_byte
@@ -345,7 +345,7 @@ def PTP_create_data(data, data_type)
     is_array = (0x4000...0x5000).include?(data_type)
     pack_template, data_byte = PTP_pack_template data_type
     if is_array
-        return [data.size, data].pack('S'+pack_template).unpack('C*')
+        return [data.size, data].pack('L'+pack_template).unpack('C*')
     else
         return [data].pack(pack_template).unpack('C*')
     end
